@@ -1,0 +1,173 @@
+Upgrade PostgreSQL to PostgreSQL 10.3
+========================================
+
+Run as root:
+-------------
+
+# Check the OS to find out if it is redhat/centos 6 or redhat/cenos 7
+-bash-4.1$ more /etc/redhat-release
+CentOS release 6.9 (Final)
+
+# If it is redhat/centos 7:
+
+cd /root/postgres/stage/10.3/redhat7-64-bit
+rpm -ivh postgresql10-10.3-1PGDG.rhel7.x86_64.rpm postgresql10-contrib-10.3-1PGDG.rhel7.x86_64.rpm postgresql10-devel-10.3-1PGDG.rhel7.x86_64.rpm postgresql10-libs-10.3-1PGDG.rhel7.x86_64.rpm postgresql10-server-10.3-1PGDG.rhel7.x86_64.rpm
+
+# If it is redhat/centos 6:
+
+cd /root/postgres/stage/10.3/redhat6-64-bit
+
+# In case libicu-devel package is missing, install this package as below.
+yum install libicu-devel*
+
+rpm -ivh postgresql10-10.3-1PGDG.rhel6.x86_64.rpm postgresql10-contrib-10.3-1PGDG.rhel6.x86_64.rpm postgresql10-devel-10.3-1PGDG.rhel6.x86_64.rpm postgresql10-libs-10.3-1PGDG.rhel6.x86_64.rpm postgresql10-server-10.3-1PGDG.rhel6.x86_64.rpm
+
+## Create directories and set permission
+
+mkdir -p /var/lib/pgsql/bin
+mkdir -p /var/lib/pgsql/log
+mkdir -p /r01/pgsql/data/5432/10.3
+mkdir -p /r01/pgsql/data/5433/10.3
+mkdir -p /r01/pgsql/data/5432/user_tblspc
+mkdir -p /r01/pgsql/data/5433/user_tblspc
+mkdir -p /r01/pgsql/data/5432/log
+mkdir -p /r01/pgsql/data/5433/log
+mkdir -p /r02/pgsql/backups/5432/archive
+mkdir -p /r02/pgsql/backups/5432/base
+mkdir -p /r02/pgsql/backups/5432/config
+mkdir -p /r02/pgsql/backups/5432/dumps
+mkdir -p /r02/pgsql/backups/5432/pg_xlog
+mkdir -p /r02/pgsql/backups/5432/wals
+mkdir -p /r02/pgsql/backups/5433/archive
+mkdir -p /r02/pgsql/backups/5433/base
+mkdir -p /r02/pgsql/backups/5433/config
+mkdir -p /r02/pgsql/backups/5433/dumpsc
+mkdir -p /r02/pgsql/backups/5433/pg_xlog
+mkdir -p /r02/pgsql/backups/5433/wals
+chown -R postgres:postgres /var/lib/pgsql
+chown -R postgres:postgres /r01/pgsql
+chown -R postgres:postgres /r02/pgsql
+
+Run as postgres:
+------------------
+
+### Special note for rcust database at port 5433 ##
+### Enable connection to template_dpam database ###
+
+# update pg_catalog.pg_database set datallowconn = true where datname = 'template_dpam';
+
+
+# Stop the old database
+
+/var/lib/pgsql/bin/stop_pg-5432.sh
+
+# Create database
+
+/usr/pgsql-10/bin/initdb --encoding UNICODE --locale en_US.UTF-8 -D /r01/pgsql/data/5432/10.3
+
+# Setup all DBA files under /var/lib/pgsql/bin
+
+# Copy pg_hba.conf and postgresql.conf and from old directory to the new directory
+
+cp /r01/pgsql/data/5432/9.6.5/pg_hba.conf /r01/pgsql/data/5432/10.3/
+cp /r01/pgsql/data/5432/9.6.5/postgresql.conf /r01/pgsql/data/5432/10.3/
+
+## Upgrade the database
+
+mkdir -p /var/lib/pgsql/bin/upgrade/5432
+mkdir -p /var/lib/pgsql/bin/upgrade/5433
+rm /var/lib/pgsql/bin/upgrade/5432/*
+rm /var/lib/pgsql/bin/upgrade/5433/*
+
+Update environment file: /var/lib/pgsql/bin/pg-5432-env
+
+source /var/lib/pgsql/bin/pg-5432-env
+cd /var/lib/pgsql/bin/upgrade/5432
+
+pg_upgrade -b /usr/pgsql-9.6/bin -B /usr/pgsql-10/bin -d /r01/pgsql/data/5432/9.6.5 -D /r01/pgsql/data/5432/10.3
+
+## For port 5433 ##
+
+source /var/lib/pgsql/bin/pg-5433-env
+cd /var/lib/pgsql/bin/upgrade/5433
+
+pg_upgrade -b /usr/pgsql-9.6/bin -B /usr/pgsql-10/bin -p 5433 -P 5433 -d /r01/pgsql/data/5433/9.6.5 -D /r01/pgsql/data/5433/10.3
+
+# Start the database
+
+/var/lib/pgsql/bin/start_pg-5432.sh
+
+# Analyze statistics
+
+/var/lib/pgsql/bin/upgrade/5432/analyze_new_cluster.sh
+
+# Delete old database file
+
+/var/lib/pgsql/bin/upgrade/5432/delete_old_cluster.sh
+
+
+# Restart db
+
+/var/lib/pgsql/bin/stop_pg-5432.sh
+/var/lib/pgsql/bin/start_pg-5432.sh
+
+# Setup crontab job and test all scripts.
+
+30 2 * * * /var/lib/pgsql/bin/pg_hot-bkp-5432-v2.sh > /dev/null 2>&1
+# 0 2 * * * /var/lib/pgsql/bin/pg_hot-bkp-5433-v2.sh > /dev/null 2>&1
+
+30 20 * * 1-5 /var/lib/pgsql/bin/pg_lgcl_bkp-5432.sh > /dev/null 2>&1
+# 0 20 * * 1-5 /var/lib/pgsql/bin/pg_lgcl_bkp-5433.sh > /dev/null 2>&1
+
+30 10 * * 6-7 /var/lib/pgsql/bin/pg_lgcl_bkp-5432.sh > /dev/null 2>&1
+# 0 10 * * 6-7 /var/lib/pgsql/bin/pg_lgcl_bkp-5433.sh > /dev/null 2>&1
+
+# 30 7 * * 1-5 /var/lib/pgsql/bin/analyze_db-5432.sh > /dev/null 2>&1
+# 0 7 * * 1-5 /var/lib/pgsql/bin/analyze_db-5433.sh > /dev/null 2>&1
+
+# 30 17 * * 6 /var/lib/pgsql/bin/reindex_db_full-5432.sh > /dev/null 2>&1
+# 0 17 * * 6 /var/lib/pgsql/bin/reindex_db_full-5433.sh > /dev/null 2>&1
+
+# 30 17 * * 7 /var/lib/pgsql/bin/analyze_db_full-5432.sh > /dev/null 2>&1
+# 0 17 * * 7 /var/lib/pgsql/bin/analyze_db_full-5433.sh > /dev/null 2>&1
+
+# The following is for Redhat 6 only.
+
+# Configure autostart
+
+# As a root
+
+chkconfig --del postgresql-9.6-5432
+chkconfig --del postgresql-9.6-5433
+
+cd /etc/init.d
+rm -f postgresql-9.6-5432
+rm -f postgresql-9.6-5433
+ln -s postgresql-10 postgresql-10-5432
+cd /etc/sysconfig/pgsql
+rm -f postgresql-9.6-5432
+rm -f postgresql-9.6-5433
+
+cat > postgresql-10-5432 << EOF
+PGDATA=/r01/pgsql/data/5432/10.3
+EOF
+
+cat > postgresql-10-5433 << EOF
+PGDATA=/r01/pgsql/data/5433/10.3
+EOF
+
+chkconfig postgresql-10-5432 on
+
+service postgresql-10-5432 stop
+
+ps -ef | grep postgres
+
+service postgresql-10-5432 start
+
+
+#### Speciial note for template_dpam database at port 5433 at rsqlhost. Make sure to enable connection for all databases.
+
+postgres=# update pg_database set datallowconn = true where datname = 'template_dpam';
+UPDATE 1
+
+

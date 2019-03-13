@@ -1,0 +1,19 @@
+CCC tuned parameters in PostgreSQL RDS: 
+
+maintenance_work_mem  GREATEST({DBInstanceClassMemory/16384},65536)  
+
+checkpoint_completion_target 0.9 
+      
+effective_cache_size {DBInstanceClassMemory*75/819200}   
+
+work_mem  *No value, use RDS default*
+
+wal_buffers 8192
+
+shared_buffers {DBInstanceClassMemory/32768}   
+
+max_connections LEAST({DBInstanceClassMemory/9531392},5000) 
+
+timezone = US/Eastern
+
+max_prepared_transactions = 100

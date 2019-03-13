@@ -1,0 +1,172 @@
+                           PostgreSQL Database Recovery Runbook
+              ===========================================================
+                           By Evan Lai. Last Update: 09/13/2012
+
+
+Part 1: Overview
+----------------
+
+This document covers the following PostgreSQL database recovery procedures. These procedures
+only apply to the primary database. 
+
+* Full Database Recovery
+* Point-in-time Database Recovery
+* Restore the archive database from S3
+
+
+
+Part 2: Full Database Recovery
+------------------------------
+
+Use these procedures to conduct database recovery up to the minute of database shutdown or crash.
+
+1. Shutdown the database normally or crash the database:
+
+Login as "postgres"
+
+/var/lib/pgsql/bin/stop_pg.sh
+
+If the database can't be shut down for whatever reason, crash the database by running the following:
+
+kill -9 $(head -1 /u01/pgsql/9.2/data/postmaster.pid)
+
+
+2. Preserve xlog
+
+rm -rf /u02/pgsql/backups/pg_xlog
+cp -rp /u01/pgsql/9.2/data/pg_xlog /u02/pgsql/backups
+cp /u02/pgsql/backups/pg_xlog/* /u02/pgsql/backups/wals
+(Ok to ignore "cp: omitting directory `/u02/pgsql/backups/pg_xlog/archive_status'" message)
+
+
+3. Restore base backup
+
+* cd /u02/pgsql/backups/base
+* Identify the latest base backup from /u02/pgsql/backups/base
+* cp pg-hot-bkp.ip-10-40-1-26.201209121140.tar.gz /u01/pgsql/9.2
+* cd /u01/pgsql/9.2
+* rm -rf data
+* tar -zxvpf pg-hot-bkp.ip-10-40-1-26.201209121140.tar.gz
+* rm *.tar.gz
+
+
+4. Create recovery file for full database recovery
+
+rm $PGDATA/recovery.done
+cat > $PGDATA/recovery.conf << EOF
+restore_command = 'cp /u02/pgsql/backups/wals/%f %p'
+EOF
+
+
+5. Startup the database for full recovery
+
+cd /var/lib/pgsql/bin
+./start_pg.sh
+
+
+6. Review "/u01/pgsql/9.2/data/recovery.done" file is created. 
+   Review log file under /u01/pgsql/9.2/data/pg_log to make sure recovery is completed.
+
+
+7. Take a full hot backup of the database
+
+/var/lib/pgsql/bin/pg_hot-bkp.sh
+
+
+8. Rebuild the standby database
+
+
+
+Part 3: Point-in-time Database Recovery
+---------------------------------------
+
+Use these procedures to conduct database recovery up to the minute of database shutdown or crash.
+
+1. Shutdown the database normally or crash the database:
+
+Login as "postgres"
+
+/var/lib/pgsql/bin/stop_pg.sh
+
+If the database can't be shut down for whatever reason, crash the database by running the following:
+
+kill -9 $(head -1 /u01/pgsql/9.2/data/postmaster.pid)
+
+
+2. Preserve xlog
+
+rm -rf /u02/pgsql/backups/pg_xlog
+cp -rp /u01/pgsql/9.2/data/pg_xlog /u02/pgsql/backups
+cp /u02/pgsql/backups/pg_xlog/* /u02/pgsql/backups/wals
+(Ok to ignore "cp: omitting directory `/u02/pgsql/backups/pg_xlog/archive_status'" message)
+
+
+3. Restore base backup
+
+* cd /u02/pgsql/backups/base
+* Identify the latest base backup from /u02/pgsql/backups/base
+* cp pg-hot-bkp.ip-10-40-1-26.201209121140.tar.gz /u01/pgsql/9.2
+* cd /u01/pgsql/9.2
+* rm -rf data
+* tar -zxvpf pg-hot-bkp.ip-10-40-1-26.201209121140.tar.gz
+* rm *.tar.gz
+
+
+4. Create recovery file for point-in-time database recovery
+
+rm $PGDATA/recovery.done
+cat > $PGDATA/recovery.conf << EOF
+restore_command = 'cp /u02/pgsql/backups/wals/%f %p'
+recovery_target_time = '2012-09-13 19:07:35.9262+00'
+EOF
+
+
+5. Startup the database for point-in-time database recovery
+
+cd /var/lib/pgsql/bin
+./start_pg.sh
+
+
+6. Reset xlog and enable database connections
+
+psql
+select * from pg_xlog_replay_resume();
+
+
+7. Review "/u01/pgsql/9.2/data/recovery.done" file is created. 
+   Review log file under /u01/pgsql/9.2/data/pg_log to make sure recovery is completed.
+
+
+8. Take a full hot backup of the database
+
+/var/lib/pgsql/bin/pg_hot-bkp.sh
+
+
+9. Rebuild the standby database
+
+
+
+Part 4: Restore the archive database from S3
+--------------------------------------------
+
+1. List S3 long term backup contents
+
+For PRDC1 database:
+
+s3cmd ls s3://prdc1-pg-archive-copyright-com
+
+For DEVC1 database
+
+s3cmd ls s3://devc1-pg-archive-copyright-com
+
+
+2. Download S3 long term backup contents
+
+mkdir -p /u02/pgsql/backups/s3-download
+cd /u02/pgsql/backups/s3-download
+s3cmd -r get s3://prdc1-pg-archive-copyright-com/prdc1pgdb1-pg-archive-201209080500/
+
+
+3. Follow steps in Part 3 to conduct database point-in-time recovery
+
+

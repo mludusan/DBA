@@ -1,0 +1,184 @@
+
+                   How to Fix CCC Streams Issues
+               --------------------------------------
+                       Evan Lai, 09/15/11
+					   Shine T,  10/4/11  Added sync orders step
+                       Evan Lai, 12/29/11 Add restart db step after strmadmin is dropped
+                       Evan Lai, 02/05/18 Add step to force to drop Oracle Stream per SR 3-16801858511
+
+
+Summary: If CCC streams encounters any errors, please use the procedures below to rebuild CCC Streams 
+         configuration. Please note that these procedures only work for CCC environment. It is not to 
+         replace any official streams troubleshooting guides from Oracle. If new procedures are developed
+         for CCC environment, we will update this document accordingly.
+
+
+Part 1: Remove Streams Configuration
+------------------------------------
+
+1. Login to the Grid Control, go to "Stream" -> "Manage Replication" and click "Remove Streams Configuration" 
+   to submit a "Remove Streams Configuration" job.
+
+Note: Or submit run from sqlplus
+
+EXEC DBMS_STREAMS_ADM.REMOVE_STREAMS_CONFIGURATION();
+
+
+*******************************************
+**
+** Special note to force to drop Stream configuration if the previous step hangs
+**
+
+1.1. Cancel/kill the current session doing the DBMS_STREAMS_ADM.REMOVE_STREAMS_CONFIGURATION call.
+
+
+1.2. Make sure all Streams processes are disabled or aborted (dba_capture, dba_propagation, dba_apply).
+
+1.3. Then manually drop the affected queue using:
+
+conn STRMADMIN
+exec DBMS_STREAMS_ADM.REMOVE_QUEUE( 'STREAMS_QUEUE', TRUE, TRUE );
+
+If DBMS_STREAMS_ADM.REMOVE_QUEUE doesn't work, do:
+
+conn strmadmin
+exec dbms_aqadm.drop_queue_table ( 'STREAMS_QUEUE_TABLE', TRUE );
+
+connect strmadmin
+exec dbms_aqadm.drop_queue_table ( 'APPLY_QUEUE_TABLE', TRUE );
+
+1.4. Once above completes fine, then go with the REMOVE_STREAMS_CONFIGURATION again:
+
+conn / as sysdba
+exec DBMS_STREAMS_ADM.REMOVE_STREAMS_CONFIGURATION 
+
+**
+**  End Special note
+**
+
+
+2. Once the job above completes successfully, login to the databases as strmadmin and run queries below.
+
+SQL> select capture_name, status from dba_capture;
+
+no rows selected
+
+SQL> select apply_name, status from dba_apply;
+
+no rows selected
+
+Note: Make sure these two queries return no rows.
+
+3. Drop "strmadmin" user.
+
+SQL> drop user strmadmin cascade;
+
+4. Restart the database.
+
+
+
+Part 2: Create Streams Configuration
+------------------------------------
+
+1. Create "strmadmin" user.
+
+CREATE USER strmadmin IDENTIFIED BY &&pw DEFAULT TABLESPACE streams_data QUOTA UNLIMITED ON streams_data;
+
+grant DBA to strmadmin;
+
+BEGIN
+  DBMS_STREAMS_AUTH.GRANT_ADMIN_PRIVILEGE (
+    grantee          => 'strmadmin',    
+    grant_privileges => true);
+END;
+/
+commit;
+
+2. Check out all sql code from "cm1/u01/svnrepo/techteam/Orders/trunk/STREAMS/".
+
+3. Login as strmadmin and run "SetupStreams.sql" from your local check out directory.
+
+SQL> @SetupStreams.sql
+
+4. Verify CCC streams is working.
+
+4.1) Login to the Grid Control, go to "Stream" -> "Manage Replication" -> "Streams" to confirm 
+     the status is okay
+
+4.2) Login to the database as a DBA account, run the following
+
+update ccctf.replication_is_up
+   set upd_dtm = sysdate
+where replication_test_inst = 1;
+
+commit;
+
+select to_char(t.upd_dtm, 'YYYY-MM-DD HH24:MI:SS'), to_char(o.upd_dtm, 'YYYY-MM-DD HH24:MI:SS')
+from ccctf.replication_is_up t, orders.replication_is_up o;
+
+Note: Make sure the output of the two timestamps are the same.
+
+Part 3: Sync Orders since Streams went down
+-------------------------------------------
+
+As system run sync_orders_from_start_time.sql as system
+
+SQL>@sync_orders_from_start_time.sql
+
+When prompted "What date did streams go down?" input date (Eg format: 10/01/2011 00:00:00) . Paul S should be able to provide the value
+
+Part 4: Clean up Old archive files
+-----------------------------------
+
+Use RMAN to clean up old archive files to clear the space after streams is rebuilt, data is synced, and it is verified to be wroking.
+Be sure to delete only those files that have already been backed up. if the previous night's RMAN backup completed successfully, then it is safe to delete all files older than 24 hours.
+  
+
+
+
+  
+--------------------------------------------------------------------------------------------------------------------
+
+SQL> connect /as sysdba
+Connected.
+SQL> update ccctf.replication_is_up
+   set upd_dtm = sysdate
+where replication_test_inst = 1;  2    3  
+
+1 row updated.
+
+SQL> commit;
+
+Commit complete.
+
+SQL> select to_char(t.upd_dtm, 'YYYY-MM-DD HH24:MI:SS'), to_char(o.upd_dtm, 'YYYY-MM-DD HH24:MI:SS')
+from ccctf.replication_is_up t, orders.replication_is_up o;  2  
+
+TO_CHAR(T.UPD_DTM,' TO_CHAR(O.UPD_DTM,'
+------------------- -------------------
+2019-01-30 10:22:05 2019-01-30 10:20:21
+
+SQL> connect system
+Enter password: 
+Connected.
+SQL> @sync_orders_from_start_time.sql
+What date did streams go down?01/28/2019 15:00:00
+125  /
+old   4:    l_start_date     DATE := TO_DATE( '&l_start_date_input', 'MM/DD/YYYY HH24:MI:SS' );
+new   4:    l_start_date     DATE := TO_DATE( '01/28/2019 15:00:00', 'MM/DD/YYYY HH24:MI:SS' );
+/
+
+PL/SQL procedure successfully completed.
+
+SQL> old   4:    l_start_date     DATE := TO_DATE( '&l_start_date_input', 'MM/DD/YYYY HH24:MI:SS' );
+new   4:    l_start_date     DATE := TO_DATE( '01/28/2019 15:00:00', 'MM/DD/YYYY HH24:MI:SS' );
+
+PL/SQL procedure successfully completed.
+
+SQL> exit
+Disconnected from Oracle Database 12c Enterprise Edition Release 12.2.0.1.0 - 64bit Production
+[oracccq1@shnpc1oradb1 STREAMS]$
+
+
+----------------------------------------------------------------------------------------------------------------------------  
+ 
